@@ -172,6 +172,7 @@ capex = []
 depreciation = []
 wc_change = []
 
+# Revenue Projection Method (Growth Rate Based)
 if revenue_method == "Growth Rate Based":
     st.subheader("Revenue Growth Projections")
     col1, col2 = st.columns(2)
@@ -205,12 +206,12 @@ if revenue_method == "Growth Rate Based":
         current_revenue = current_revenue * (1 + growth_rates[i])
         revenue.append(current_revenue)
     
-    # Show calculated revenues
+    # Show calculated revenues (formatted)
     st.subheader("Calculated Revenue Projections")
     revenue_df = pd.DataFrame({
         "Year": [f"Year {i+1}" for i in range(projection_years)],
         "Growth Rate": [f"{gr*100:.1f}%" for gr in growth_rates],
-        f"Revenue ({currency_symbol})": [f"{r:,.0f}" for r in revenue]
+        f"Revenue ({currency_symbol})": [f"{currency_symbol}{r:,.0f}" for r in revenue]
     })
     st.dataframe(revenue_df, use_container_width=True)
 
@@ -240,18 +241,137 @@ ebit = [e - d for e, d in zip(ebitda, depreciation)]  # EBIT = EBITDA - Deprecia
 nopat = [e * (1 - tax_rate) for e in ebit]  # NOPAT = EBIT * (1 - Tax Rate)
 fcf = [nopat + d - c - wc for nopat, d, c, wc in zip(nopat, depreciation, capex, wc_change)]  # Add back depreciation
 
+# Projected Free Cash Flows (formatted)
 st.markdown("---")
 st.header("Projected Free Cash Flows")
 df_proj = pd.DataFrame({
     "Year": [f"Year {i+1}" for i in range(projection_years)],
-    f"Revenue ({currency_symbol})": revenue,
-    f"EBITDA ({currency_symbol})": ebitda,
-    f"CapEx ({currency_symbol})": capex,
-    f"Depreciation ({currency_symbol})": depreciation,
-    f"Change in WC ({currency_symbol})": wc_change,
-    f"Free Cash Flow ({currency_symbol})": fcf
+    f"Revenue ({currency_symbol})": [f"{currency_symbol}{r:,.0f}" for r in revenue],
+    f"EBITDA ({currency_symbol})": [f"{currency_symbol}{e:,.0f}" for e in ebitda],
+    f"CapEx ({currency_symbol})": [f"{currency_symbol}{c:,.0f}" for c in capex],
+    f"Depreciation ({currency_symbol})": [f"{currency_symbol}{d:,.0f}" for d in depreciation],
+    f"Change in WC ({currency_symbol})": [f"{currency_symbol}{wc:,.0f}" for wc in wc_change],
+    f"Free Cash Flow ({currency_symbol})": [f"{currency_symbol}{f:,.0f}" for f in fcf]
 })
 st.dataframe(df_proj, use_container_width=True)
 
 st.markdown("---")
-st.header("Next Step: Terminal Value and DCF Valuation")
+st.header("Step 3: Terminal Value and DCF Valuation")
+
+# Terminal Value and DCF Valuation
+st.subheader("Terminal Value Assumptions")
+terminal_growth_rate = st.number_input(
+    "Terminal Growth Rate (%)",
+    min_value=0.0,
+    max_value=8.0,
+    value=3.0,
+    step=0.1
+) / 100
+
+# Calculate Terminal Value (Gordon Growth Model)
+last_fcf = fcf[-1] if len(fcf) > 0 else 0
+if wacc > terminal_growth_rate:
+    terminal_value = last_fcf * (1 + terminal_growth_rate) / (wacc - terminal_growth_rate)
+else:
+    terminal_value = np.nan
+
+st.write(f"**Calculated Terminal Value:** {currency_symbol}{terminal_value:,.0f}")
+
+# Discount Free Cash Flows
+discount_factors = [(1 + wacc) ** (i + 1) for i in range(projection_years)]
+discounted_fcf = [fcf[i] / discount_factors[i] for i in range(projection_years)]
+
+# Discount Terminal Value
+discounted_terminal_value = terminal_value / ((1 + wacc) ** projection_years)
+
+# Enterprise Value
+enterprise_value = sum(discounted_fcf) + discounted_terminal_value
+
+st.write(f"**Enterprise Value (DCF):** {currency_symbol}{enterprise_value:,.0f}")
+
+st.markdown("---")
+st.header("Bear, Base, and Bull Case DCF Valuation")
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.subheader("Bear Case")
+    wacc_bear = st.number_input("WACC (%) - Bear", min_value=0.0, max_value=15.0, value=wacc*100+1, step=0.1) / 100
+    tg_bear = st.number_input("Terminal Growth (%) - Bear", min_value=0.0, max_value=8.0, value=terminal_growth_rate*100-1, step=0.1) / 100
+with col2:
+    st.subheader("Base Case")
+    wacc_base = wacc
+    tg_base = terminal_growth_rate
+    st.write(f"WACC: {wacc_base*100:.2f}%")
+    st.write(f"Terminal Growth: {tg_base*100:.2f}%")
+with col3:
+    st.subheader("Bull Case")
+    wacc_bull = st.number_input("WACC (%) - Bull", min_value=0.0, max_value=15.0, value=wacc*100-1, step=0.1) / 100
+    tg_bull = st.number_input("Terminal Growth (%) - Bull", min_value=0.0, max_value=8.0, value=terminal_growth_rate*100+1, step=0.1) / 100
+
+def calc_dcf(last_fcf, fcf, wacc, tg, years):
+    if wacc > tg:
+        tv = last_fcf * (1 + tg) / (wacc - tg)
+        discount_factors = [(1 + wacc) ** (i + 1) for i in range(years)]
+        discounted_fcf = [fcf[i] / discount_factors[i] for i in range(years)]
+        discounted_tv = tv / ((1 + wacc) ** years)
+        ev = sum(discounted_fcf) + discounted_tv
+        return ev
+    else:
+        return np.nan
+
+ev_bear = calc_dcf(last_fcf, fcf, wacc_bear, tg_bear, projection_years)
+ev_base = calc_dcf(last_fcf, fcf, wacc_base, tg_base, projection_years)
+ev_bull = calc_dcf(last_fcf, fcf, wacc_bull, tg_bull, projection_years)
+
+st.write(f"**Bear Case Enterprise Value:** {currency_symbol}{ev_bear:,.0f}")
+st.write(f"**Base Case Enterprise Value:** {currency_symbol}{ev_base:,.0f}")
+st.write(f"**Bull Case Enterprise Value:** {currency_symbol}{ev_bull:,.0f}")
+
+# --- Sensitivity Analysis Section ---
+st.markdown("---")
+st.header("Sensitivity Analysis")
+
+st.subheader("Select Variables for Sensitivity Analysis")
+wacc_range = st.slider(
+    "WACC Range (%)",
+    min_value=max(0.0, wacc*100-3),
+    max_value=15.0,
+    value=(max(0.0, wacc*100-1), min(15.0, wacc*100+1)),
+    step=0.1
+)
+terminal_growth_range = st.slider(
+    "Terminal Growth Rate Range (%)",
+    min_value=0.0,
+    max_value=8.0,
+    value=(2.0, 4.0),
+    step=0.1
+)
+
+wacc_values = np.arange(wacc_range[0], wacc_range[1]+0.01, 0.5) / 100
+tg_values = np.arange(terminal_growth_range[0], terminal_growth_range[1]+0.01, 0.5) / 100
+
+results = []
+for w in wacc_values:
+    row = []
+    for g in tg_values:
+        if w > g:
+            tv = last_fcf * (1 + g) / (w - g)
+            # Discount TV and FCFs for each WACC
+            discount_factors = [(1 + w) ** (i + 1) for i in range(projection_years)]
+            discounted_fcf = [fcf[i] / discount_factors[i] for i in range(projection_years)]
+            discounted_tv = tv / ((1 + w) ** projection_years)
+            ev = sum(discounted_fcf) + discounted_tv
+            # Format as currency
+            ev_fmt = f"{currency_symbol}{ev:,.0f}"
+        else:
+            ev_fmt = "-"
+        row.append(ev_fmt)
+    results.append(row)
+
+sens_df = pd.DataFrame(
+    results,
+    index=[f"{w*100:.2f}%" for w in wacc_values],
+    columns=[f"{g*100:.2f}%" for g in tg_values]
+)
+st.write("**Enterprise Value Sensitivity Table**")
+st.dataframe(sens_df, use_container_width=True)
